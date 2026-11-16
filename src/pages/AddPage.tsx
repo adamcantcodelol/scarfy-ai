@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Check, ChevronLeft, ImagePlus, Loader2, Plus, Save, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { Check, ChevronLeft, ClipboardPaste, ImagePlus, Loader2, Plus, Save, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { DetectionBatch, DetectedGarment, GarmentMetadata, WardrobeItem } from '../types'
 import { CATEGORIES, FORMALITIES } from '../types'
 import { analyzeGarmentBatch } from '../lib/ai'
@@ -9,6 +9,15 @@ import { emptyGarmentMetadata } from '../lib/defaults'
 import { deleteBatch, getAllBatches, putBatch } from '../lib/db'
 import { GarmentFields } from '../components/GarmentFields'
 import { useObjectUrl } from '../lib/hooks'
+import { showToast } from '../lib/toasts'
+import { subscribeIngest, type IngestSource } from '../lib/ingest'
+import {
+  IMAGE_ACCEPT,
+  classifyImageFile,
+  extractImagesFromClipboardRead,
+  heicUnsupportedMessage,
+  unsupportedFormatMessage,
+} from '../lib/clipboard-images'
 
 interface AddPageProps {
   connection: AiConnection
@@ -122,10 +131,13 @@ export function AddPage({ connection, onAddItems, onOpenSettings, onApiUsage }: 
   const [step, setStep] = useState<'upload' | 'review' | 'manual'>('upload')
   const [batches, setBatches] = useState<DetectionBatch[]>([])
   const [analyzing, setAnalyzing] = useState(false)
+  const [progress, setProgress] = useState<{ current: number; total: number; name: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [manualFile, setManualFile] = useState<File | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const handleFilesRef = useRef<(files: File[], source?: IngestSource) => Promise<void>>(async () => {})
   const [manualDraft, setManualDraft] = useState<GarmentMetadata>(emptyGarmentMetadata())
   const [hydrated, setHydrated] = useState(false)
 
@@ -175,30 +187,64 @@ export function AddPage({ connection, onAddItems, onOpenSettings, onApiUsage }: 
     setStep('upload')
   }
 
-  const handleFiles = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) return
+  const handleFiles = async (fileList: File[] | FileList | null, source: IngestSource = 'upload') => {
+    const incoming = fileList ? Array.from(fileList) : []
+    if (incoming.length === 0) return
+
     setError('')
     setNotice('')
-    const selected = Array.from(fileList).filter((file) => file.type.startsWith('image/'))
+
+    const selected: File[] = []
+    const skipped: string[] = []
+    for (const file of incoming) {
+      const kind = classifyImageFile(file)
+      if (kind === 'unsupported') {
+        skipped.push(unsupportedFormatMessage(file.name))
+        continue
+      }
+      if (kind === 'heic') {
+        try {
+          await loadImage(file)
+          selected.push(file)
+        } catch {
+          skipped.push(heicUnsupportedMessage(file.name))
+        }
+        continue
+      }
+      try {
+        await loadImage(file)
+        selected.push(file)
+      } catch {
+        skipped.push(`${file.name || 'Image'}: this file couldn’t be decoded. Try a JPG or PNG.`)
+      }
+    }
+
     if (selected.length === 0) {
-      setError('Please choose image files only.')
+      const message = skipped.join(' · ') || 'Please choose image files only.'
+      setError(message)
+      showToast('error', message)
       return
     }
     if (!connection.apiKey) {
-      setError('Add your API key in Settings before AI recognition.')
-      onOpenSettings()
+      const message = 'Add your API key in Settings before AI recognition.'
+      setError(message)
+      showToast('error', message)
       return
     }
 
+    const verb = source === 'paste' ? 'Pasting' : source === 'drop' ? 'Dropping' : 'Uploading'
     setAnalyzing(true)
+    setProgress({ current: 0, total: selected.length, name: selected[0]?.name || 'image' })
+    showToast('info', `${verb} ${selected.length} image${selected.length === 1 ? '' : 's'}…`, 2500)
     const created: DetectionBatch[] = []
-    const failures: string[] = []
+    const failures: string[] = [...skipped]
 
-    for (const file of selected) {
+    for (const [index, file] of selected.entries()) {
+      setProgress({ current: index + 1, total: selected.length, name: file.name || `image ${index + 1}` })
       try {
         const [batch, image] = await Promise.all([analyzeGarmentBatch(connection, file), loadImage(file)])
         onApiUsage()
-        batch.sourceName = file.name
+        batch.sourceName = file.name || `pasted-image-${index + 1}`
         batch.sourceMimeType = file.type || batch.sourceMimeType
         batch.width = image.naturalWidth
         batch.height = image.naturalHeight
@@ -211,17 +257,65 @@ export function AddPage({ connection, onAddItems, onOpenSettings, onApiUsage }: 
         }
         created.push(batch)
       } catch (err) {
-        failures.push(`${file.name}: ${err instanceof Error ? err.message : 'analysis failed'}`)
+        failures.push(`${file.name || 'Image'}: ${err instanceof Error ? err.message : 'analysis failed'}`)
       }
     }
 
     setAnalyzing(false)
+    setProgress(null)
     if (created.length > 0) {
       setBatches(created)
       setStep('review')
-      if (failures.length > 0) setError(failures.join(' · '))
+      const success = `Ready to review ${created.length} photo${created.length === 1 ? '' : 's'}.`
+      setNotice(success)
+      showToast('success', success)
+      if (failures.length > 0) {
+        const message = failures.join(' · ')
+        setError(message)
+        showToast('error', message, 10000)
+      }
     } else {
-      setError(failures.join(' · ') || 'No garments could be analyzed.')
+      const message = failures.join(' · ') || 'No garments could be analyzed.'
+      setError(message)
+      showToast('error', message, 10000)
+    }
+  }
+
+  handleFilesRef.current = handleFiles
+
+  useEffect(() => subscribeIngest((files, source) => {
+    void handleFilesRef.current(files, source)
+  }), [])
+
+  const openFilePicker = () => {
+    const input = fileInputRef.current
+    if (!input || analyzing) return
+    input.value = ''
+    input.click()
+  }
+
+  const onFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    // Copy files BEFORE resetting the input. In Chrome/Edge, FileList is live and
+    // setting input.value = '' empties a held FileList reference, which made
+    // uploads look like they did nothing after the file picker closed.
+    const selected = event.target.files ? Array.from(event.target.files) : []
+    event.target.value = ''
+    void handleFiles(selected, 'upload')
+  }
+
+  const pasteFromClipboardButton = async () => {
+    try {
+      const { files, warnings } = await extractImagesFromClipboardRead()
+      for (const warning of warnings) showToast('error', warning, 9000)
+      if (files.length === 0) {
+        if (warnings.length === 0) showToast('error', 'No image was on the clipboard. Right-click an image and choose “Copy image”, then try again.')
+        return
+      }
+      void handleFiles(files, 'paste')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to read the clipboard.'
+      setError(message)
+      showToast('error', message)
     }
   }
 
@@ -340,42 +434,70 @@ export function AddPage({ connection, onAddItems, onOpenSettings, onApiUsage }: 
 
   return (
     <div className="space-y-6">
+      <input
+        ref={fileInputRef}
+        id="upload-file-input"
+        data-testid="upload-input"
+        type="file"
+        accept={IMAGE_ACCEPT}
+        multiple
+        className="sr-only"
+        onChange={onFileInputChange}
+      />
       <div>
         <div className="text-xs font-semibold uppercase tracking-[0.22em] text-muted">Build your closet</div>
         <h1 className="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">Add clothes</h1>
       </div>
 
       {notice && <div className="card border-sage/30 bg-sage/10 p-4 text-sm text-ink">{notice}</div>}
-      {error && <div className="card border-danger/30 bg-danger/10 p-4 text-sm text-danger">{error}</div>}
+      {error && (
+        <div className="card border-danger/30 bg-danger/10 p-4 text-sm text-danger">
+          <div>{error}</div>
+          {error.includes('API key') && (
+            <button type="button" className="btn btn-outline mt-3" onClick={onOpenSettings}>
+              Open Settings
+            </button>
+          )}
+        </div>
+      )}
+      {analyzing && (
+        <div className="card border-accent/30 bg-accent/10 p-4 text-sm text-ink" role="status">
+          <div className="flex items-center gap-2 font-semibold">
+            <Loader2 className="h-4 w-4 animate-spin" /> Analyzing{progress ? ` ${progress.current} of ${progress.total}` : ' photo…'}
+          </div>
+          {progress && <div className="mt-1 text-ink-soft">{progress.name}</div>}
+        </div>
+      )}
 
       {step === 'upload' && (
         <div className="grid gap-4 lg:grid-cols-2">
-          <label className="card group flex min-h-80 cursor-pointer flex-col items-center justify-center border-dashed p-8 text-center transition-colors hover:border-accent">
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(event) => {
-                const selected = event.target.files
-                event.target.value = ''
-                void handleFiles(selected)
-              }}
-              disabled={analyzing}
-            />
-            <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-paper-deep text-ink-soft transition-colors group-hover:bg-accent/10 group-hover:text-accent-strong">
-              {analyzing ? <Loader2 className="h-7 w-7 animate-spin" /> : <Upload className="h-7 w-7" />}
-            </div>
-            <div className="font-display text-2xl font-semibold">{analyzing ? 'Analyzing photo…' : 'Upload clothing photos'}</div>
+          <div className="card group flex min-h-80 flex-col items-center justify-center border-dashed p-8 text-center transition-colors hover:border-accent">
+            <button type="button" onClick={openFilePicker} disabled={analyzing} className="flex w-full flex-col items-center">
+              <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-paper-deep text-ink-soft transition-colors group-hover:bg-accent/10 group-hover:text-accent-strong">
+                {analyzing ? <Loader2 className="h-7 w-7 animate-spin" /> : <Upload className="h-7 w-7" />}
+              </div>
+              <div className="font-display text-2xl font-semibold">{analyzing && progress ? `Analyzing ${progress.current} of ${progress.total}…` : analyzing ? 'Analyzing photo…' : 'Upload clothing photos'}</div>
+            </button>
             <p className="mt-3 max-w-sm text-sm leading-relaxed text-ink-soft">
-              Lay garments flat in one photo. The AI finds each piece, then you crop-review and approve them locally.
+              Lay garments flat in one photo, or paste / drop images from Google or another tab. The AI finds each piece, then you crop-review and approve them locally.
             </p>
-            <div className="mt-6 flex flex-wrap justify-center gap-2 text-xs text-muted">
-              <span className="chip">JPG / PNG / WebP</span>
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
+              <button type="button" onClick={openFilePicker} disabled={analyzing} className="btn btn-primary">
+                <Upload className="h-4 w-4" /> Choose files
+              </button>
+              <button type="button" onClick={() => void pasteFromClipboardButton()} disabled={analyzing} className="btn btn-outline">
+                <ClipboardPaste className="h-4 w-4" /> Paste image
+              </button>
+            </div>
+            <p className="mt-3 max-w-sm text-xs leading-relaxed text-muted">
+              Ctrl+V pastes a copied image. Drag and drop works too. If a pasted Google link fails, right-click the image and choose “Copy image” instead of copying the URL.
+            </p>
+            <div className="mt-5 flex flex-wrap justify-center gap-2 text-xs text-muted">
+              <span className="chip">JPG / JPEG / JFIF / PNG / WebP / GIF / AVIF</span>
               <span className="chip">Batch detection</span>
               <span className="chip">Local cropping</span>
             </div>
-          </label>
+          </div>
 
           <div className="card flex flex-col justify-between p-6">
             <div>
@@ -452,11 +574,13 @@ export function AddPage({ connection, onAddItems, onOpenSettings, onApiUsage }: 
             <label className="image-frame mt-5 aspect-[4/5] cursor-pointer rounded-2xl border border-dashed border-line">
               <input
                 type="file"
-                accept="image/*"
-                className="hidden"
+                accept={IMAGE_ACCEPT}
+                data-testid="manual-input"
+                className="sr-only"
                 onChange={(event) => {
-                  setManualFile(event.target.files?.[0] ?? null)
+                  const file = event.target.files?.[0] ?? null
                   event.target.value = ''
+                  setManualFile(file)
                 }}
               />
               <div className="flex h-full flex-col items-center justify-center p-6 text-center">

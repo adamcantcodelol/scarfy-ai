@@ -28,6 +28,14 @@ import { ItemDetailPage } from './pages/ItemDetailPage'
 import { OutfitPage } from './pages/OutfitPage'
 import { SavedPage } from './pages/SavedPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { ToastHost } from './components/ToastHost'
+import { showToast } from './lib/toasts'
+import { ingestFiles } from './lib/ingest'
+import {
+  extractImagesFromClipboardEvent,
+  extractImagesFromDataTransfer,
+  isEditableTarget,
+} from './lib/clipboard-images'
 
 const SESSION_KEY = 'scarfy.apiKey'
 const PERSIST_KEY = 'scarfy.apiKey.persist'
@@ -49,10 +57,92 @@ export default function App() {
   const [usage, setUsage] = useState<UsageState>({ requests: 0 })
   const [loadError, setLoadError] = useState('')
   const usageRef = useRef<UsageState>({ requests: 0 })
+  const [dragging, setDragging] = useState(false)
+  const [updateAvailable, setUpdateAvailable] = useState(false)
+  const dragDepthRef = useRef(0)
 
   useEffect(() => {
     usageRef.current = usage
   }, [usage])
+
+  useEffect(() => {
+    const hasDraggedImages = (transfer: DataTransfer | null) => {
+      if (!transfer) return false
+      const types = Array.from(transfer.types ?? [])
+      return types.includes('Files') || types.includes('text/uri-list') || types.includes('text/html')
+    }
+
+    const onPaste = (event: ClipboardEvent) => {
+      const items = Array.from(event.clipboardData?.items ?? [])
+      const hasImage = items.some((item) => item.type.startsWith('image/') || (item.kind === 'file' && item.type.startsWith('image/')))
+      const hasHtmlOrUrl = items.some((item) => item.type === 'text/html' || item.type === 'text/uri-list')
+      if (isEditableTarget(event.target) && !hasImage) return
+      void (async () => {
+        const { files, warnings } = await extractImagesFromClipboardEvent(event)
+        if (files.length === 0 && warnings.length === 0 && !hasImage && !hasHtmlOrUrl) return
+        event.preventDefault()
+        for (const warning of warnings) showToast('error', warning, 9000)
+        if (files.length === 0) {
+          if (warnings.length === 0 && (hasImage || hasHtmlOrUrl)) {
+            showToast('error', 'No image could be read from the clipboard. Right-click and choose “Copy image”, then paste again.')
+          }
+          return
+        }
+        setPage({ name: 'add' })
+        ingestFiles(files, 'paste')
+      })()
+    }
+
+    const onDragEnter = (event: DragEvent) => {
+      if (!hasDraggedImages(event.dataTransfer)) return
+      event.preventDefault()
+      dragDepthRef.current += 1
+      setDragging(true)
+    }
+    const onDragOver = (event: DragEvent) => {
+      if (!hasDraggedImages(event.dataTransfer)) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+    }
+    const onDragLeave = (event: DragEvent) => {
+      if (!hasDraggedImages(event.dataTransfer) && dragDepthRef.current === 0) return
+      event.preventDefault()
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+      if (dragDepthRef.current === 0) setDragging(false)
+    }
+    const onDrop = (event: DragEvent) => {
+      event.preventDefault()
+      dragDepthRef.current = 0
+      setDragging(false)
+      void (async () => {
+        const { files, warnings } = await extractImagesFromDataTransfer(event.dataTransfer)
+        for (const warning of warnings) showToast('error', warning, 9000)
+        if (files.length === 0) {
+          if (warnings.length === 0) showToast('error', 'No image was in that drop. Try dropping an image file, or use “Copy image” and paste.')
+          return
+        }
+        setPage({ name: 'add' })
+        ingestFiles(files, 'drop')
+      })()
+    }
+
+    const onUpdateAvailable = () => setUpdateAvailable(true)
+
+    window.addEventListener('paste', onPaste)
+    window.addEventListener('dragenter', onDragEnter)
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('dragleave', onDragLeave)
+    window.addEventListener('drop', onDrop)
+    window.addEventListener('scarfy:update-available', onUpdateAvailable as EventListener)
+    return () => {
+      window.removeEventListener('paste', onPaste)
+      window.removeEventListener('dragenter', onDragEnter)
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragleave', onDragLeave)
+      window.removeEventListener('drop', onDrop)
+      window.removeEventListener('scarfy:update-available', onUpdateAvailable as EventListener)
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -259,6 +349,22 @@ export default function App() {
   }
 
   return (
+    <>
+    {updateAvailable && (
+      <div className="update-banner">
+        <div className="text-sm">A new version of Scarfy is ready.</div>
+        <button type="button" className="btn btn-primary py-2" onClick={() => window.location.reload()}>Reload</button>
+      </div>
+    )}
+    {dragging && (
+      <div className="drop-overlay">
+        <div className="drop-overlay-card">
+          <div className="font-display text-3xl font-semibold">Drop images to add them</div>
+          <p className="mt-2 text-sm text-ink-soft">Photos go to Add clothes and use the same recognition pipeline as uploads.</p>
+        </div>
+      </div>
+    )}
+    <ToastHost />
     <Layout
       page={page}
       onNavigate={setPage}
@@ -313,5 +419,6 @@ export default function App() {
         />
       )}
     </Layout>
+    </>
   )
 }

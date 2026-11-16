@@ -61,7 +61,7 @@ try {
   await clickText(page, 'Add item manually')
   await waitText(page, 'Manual item')
 
-  const fileInput = await page.$('input[type="file"]')
+  const fileInput = await page.$('[data-testid="manual-input"]')
   assert(fileInput, 'Manual file input not found')
   await fileInput.uploadFile(imagePath)
   await waitText(page, 'icon-192.png')
@@ -87,6 +87,95 @@ try {
   await waitText(page, 'Recommendations use only items already in your wardrobe')
   await clickText(page, 'Generate outfits')
   await page.waitForFunction(() => document.body.innerText.includes('Settings') || document.body.innerText.includes('Add your API key'), { timeout: 5000 })
+
+
+  await clickText(page, 'Settings')
+  await waitText(page, 'API provider')
+  await setInputValue(page, 'input[type="password"]', 'gsk_smoke_test_key_not_real')
+  await clickText(page, 'Save settings')
+  await waitText(page, 'Settings saved')
+
+  const mockBody = {
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({
+            garments: [
+              {
+                name: 'Smoke Test Tee',
+                category: 'top',
+                type: 't-shirt',
+                primary_color: 'navy',
+                pattern: 'solid',
+                style: [],
+                seasons: ['all-season'],
+                formality: 'casual',
+                description: 'A navy tee for smoke tests',
+                tags: ['test'],
+                confidence: 0.94,
+                box_2d: [50, 50, 900, 900],
+              },
+            ],
+          }),
+        },
+      },
+    ],
+  }
+  await page.setRequestInterception(true)
+  page.on('request', (request) => {
+    const url = request.url()
+    const isAi = /chat\/completions|:generateContent|generativelanguage|api\.groq\.com|openrouter\.ai|api\.openai\.com/.test(url)
+    if (isAi && request.method() === 'OPTIONS') {
+      void request.respond({
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': '*',
+          'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+        },
+      })
+      return
+    }
+    if (isAi && request.method() === 'POST') {
+      void request.respond({
+        status: 200,
+        contentType: 'application/json',
+        headers: { 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify(mockBody),
+      })
+      return
+    }
+    void request.continue()
+  })
+
+  await clickText(page, 'Add clothes')
+  await waitText(page, 'Upload clothing photos')
+  const uploadInput = await page.$('[data-testid="upload-input"]')
+  assert(uploadInput, 'Upload file input not found')
+  await uploadInput.uploadFile(imagePath)
+  await page.waitForFunction(
+    () => document.body.innerText.includes('Analyzing') || document.body.innerText.includes('Review detections'),
+    { timeout: 15000 },
+  )
+  await waitText(page, 'Review detections', 20000)
+  await waitText(page, 'Smoke Test Tee')
+  await clickText(page, 'Approve all')
+  await clickText(page, 'Save 1 approved')
+  await waitText(page, 'Saved 1 item')
+
+  await clickText(page, 'Add clothes')
+  await waitText(page, 'Upload clothing photos')
+  await page.evaluate(async (url) => {
+    const blob = await (await fetch(url)).blob()
+    const file = new File([blob], 'pasted.png', { type: 'image/png' })
+    const transfer = new DataTransfer()
+    transfer.items.add(file)
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: transfer })
+    window.dispatchEvent(event)
+  }, new URL('icons/icon-192.png', baseUrl).href)
+  await waitText(page, 'Review detections', 20000)
+  await waitText(page, 'Smoke Test Tee')
 
   await page.setViewport({ width: 390, height: 844 })
   await page.reload({ waitUntil: 'networkidle0' })

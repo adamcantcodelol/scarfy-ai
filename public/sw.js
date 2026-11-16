@@ -1,4 +1,4 @@
-const CACHE_NAME = 'scarfy-ai-v3'
+const CACHE_NAME = 'scarfy-ai-v4'
 const BASE = new URL('./', self.location).pathname
 const PRECACHE_URLS = [
   BASE,
@@ -23,6 +23,26 @@ self.addEventListener('activate', (event) => {
   )
 })
 
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting()
+  }
+})
+
+function networkFirst(request, fallbackUrl) {
+  return fetch(request)
+    .then((response) => {
+      if (response.ok) {
+        const copy = response.clone()
+        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
+      }
+      return response
+    })
+    .catch(() =>
+      caches.match(request).then((cached) => cached || (fallbackUrl ? caches.match(fallbackUrl) : undefined)),
+    )
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event
   if (request.method !== 'GET') return
@@ -30,32 +50,13 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return
 
   if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const copy = response.clone()
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
-          }
-          return response
-        })
-        .catch(() => caches.match(request).then((cached) => cached || caches.match(BASE))),
-    )
+    event.respondWith(networkFirst(request, BASE))
     return
   }
 
-  if (url.pathname.startsWith(`${BASE}assets/`) || url.pathname.startsWith(`${BASE}icons/`) || url.pathname === `${BASE}manifest.webmanifest`) {
+  if (url.pathname.startsWith(`${BASE}assets/`) || url.pathname.startsWith(`${BASE}icons/`) || url.pathname === `${BASE}manifest.webmanifest` || url.pathname === `${BASE}sw.js`) {
     event.respondWith(
-      caches.match(request).then((cached) => {
-        if (cached) return cached
-        return fetch(request).then((response) => {
-          if (response.ok) {
-            const copy = response.clone()
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
-          }
-          return response
-        })
-      }),
+      networkFirst(request).then((response) => response || fetch(request)),
     )
   }
 })
