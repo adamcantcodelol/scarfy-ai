@@ -149,7 +149,7 @@ export function OutfitPage({ apiKeyReady, wardrobe, onOpenSettings, onOpenAdd, o
   const generate = async () => {
     setError('')
     if (!apiKeyReady) {
-      setError('Add your Gemini API key in Settings to generate outfits.')
+      setError('Add your API key in Settings to generate outfits.')
       onOpenSettings()
       return
     }
@@ -173,7 +173,7 @@ export function OutfitPage({ apiKeyReady, wardrobe, onOpenSettings, onOpenAdd, o
         notes: notes.trim() || undefined,
       })
       setResults(outfits)
-      if (outfits.length === 0) setError('Gemini did not return any usable outfits. Try a different model or add more wardrobe items.')
+      if (outfits.length === 0) setError('The model did not return any usable outfits. Try a different model or add more wardrobe items.')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Outfit generation failed')
     } finally {

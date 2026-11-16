@@ -59,11 +59,11 @@ export function Layout({ page, onNavigate, wardrobeCount, savedCount, apiKeyRead
         </nav>
         <div className="rounded-2xl border border-line bg-paper p-4 text-xs leading-relaxed text-ink-soft">
           <div className="mb-1 font-semibold text-ink">Private by design</div>
-          Photos and wardrobe data stay in this browser. Only images you choose to analyze are sent to Gemini.
+          Photos and wardrobe data stay in this browser. Only images you choose to analyze are sent to the AI provider you pick in Settings.
         </div>
         {!apiKeyReady && (
           <button onClick={() => go({ name: 'settings' })} className="mt-4 rounded-2xl border border-accent/30 bg-accent/10 p-3 text-left text-xs text-accent-strong">
-            Add a Gemini API key to enable AI features.
+            Add an API key in Settings to enable AI features.
           </button>
         )}
       </aside>

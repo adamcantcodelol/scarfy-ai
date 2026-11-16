@@ -41,7 +41,7 @@ export function WardrobePage({ wardrobe, onOpenItem, onAdd }: WardrobePageProps)
           <h1 className="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">Wardrobe</h1>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-ink-soft">
             {wardrobe.length === 0
-              ? 'Upload a photo of your clothes and let Gemini find the pieces inside.'
+              ? 'Upload a photo of your clothes and let the AI find the pieces inside.'
               : `${wardrobe.length} item${wardrobe.length === 1 ? '' : 's'} cataloged locally in your browser.`}
           </p>
         </div>
@@ -86,7 +86,7 @@ export function WardrobePage({ wardrobe, onOpenItem, onAdd }: WardrobePageProps)
           <h2 className="font-display text-2xl font-semibold">{wardrobe.length === 0 ? 'Start your digital wardrobe' : 'No matches found'}</h2>
           <p className="mt-2 max-w-sm text-sm text-ink-soft">
             {wardrobe.length === 0
-              ? 'Photograph clothes laid flat, upload them here, and approve the pieces Gemini detects.'
+              ? 'Photograph clothes laid flat, upload them here, and approve the pieces the AI detects.'
               : 'Try a different search or clear a filter.'}
           </p>
           {wardrobe.length === 0 && (

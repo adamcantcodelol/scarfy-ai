@@ -1,3 +1,7 @@
+import type { ProviderId } from './lib/providers'
+
+export type { ProviderId }
+
 export type Category =
   | 'top'
   | 'bottom'
@@ -93,8 +97,10 @@ export interface Preferences {
 }
 
 export interface Settings {
+  provider: ProviderId
   apiKey: string
   model: string
+  baseUrl?: string
   rememberKeyInSession: boolean
   persistApiKey: boolean
   updatedAt: number

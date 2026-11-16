@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Check, ChevronLeft, ImagePlus, Loader2, Plus, Save, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { DetectionBatch, DetectedGarment, GarmentMetadata, WardrobeItem } from '../types'
 import { CATEGORIES, FORMALITIES } from '../types'
-import { analyzeGarmentBatch } from '../lib/gemini'
+import { analyzeGarmentBatch } from '../lib/ai'
+import type { AiConnection } from '../lib/providers'
 import { cropGarment, loadImage, prepareImageForStorage, uid } from '../lib/image'
 import { emptyGarmentMetadata } from '../lib/defaults'
 import { deleteBatch, getAllBatches, putBatch } from '../lib/db'
@@ -10,8 +11,7 @@ import { GarmentFields } from '../components/GarmentFields'
 import { useObjectUrl } from '../lib/hooks'
 
 interface AddPageProps {
-  apiKey: string
-  model: string
+  connection: AiConnection
   onAddItems: (items: WardrobeItem[]) => Promise<void> | void
   onOpenSettings: () => void
   onApiUsage: () => void
@@ -118,7 +118,7 @@ function GarmentReviewCard({
   )
 }
 
-export function AddPage({ apiKey, model, onAddItems, onOpenSettings, onApiUsage }: AddPageProps) {
+export function AddPage({ connection, onAddItems, onOpenSettings, onApiUsage }: AddPageProps) {
   const [step, setStep] = useState<'upload' | 'review' | 'manual'>('upload')
   const [batches, setBatches] = useState<DetectionBatch[]>([])
   const [analyzing, setAnalyzing] = useState(false)
@@ -184,8 +184,8 @@ export function AddPage({ apiKey, model, onAddItems, onOpenSettings, onApiUsage 
       setError('Please choose image files only.')
       return
     }
-    if (!apiKey) {
-      setError('Add your Gemini API key in Settings before AI recognition.')
+    if (!connection.apiKey) {
+      setError('Add your API key in Settings before AI recognition.')
       onOpenSettings()
       return
     }
@@ -196,7 +196,7 @@ export function AddPage({ apiKey, model, onAddItems, onOpenSettings, onApiUsage 
 
     for (const file of selected) {
       try {
-        const [batch, image] = await Promise.all([analyzeGarmentBatch(apiKey, model, file), loadImage(file)])
+        const [batch, image] = await Promise.all([analyzeGarmentBatch(connection, file), loadImage(file)])
         onApiUsage()
         batch.sourceName = file.name
         batch.sourceMimeType = file.type || batch.sourceMimeType
@@ -368,7 +368,7 @@ export function AddPage({ apiKey, model, onAddItems, onOpenSettings, onApiUsage 
             </div>
             <div className="font-display text-2xl font-semibold">{analyzing ? 'Analyzing photo…' : 'Upload clothing photos'}</div>
             <p className="mt-3 max-w-sm text-sm leading-relaxed text-ink-soft">
-              Lay garments flat in one photo. Gemini finds each piece, then you crop-review and approve them locally.
+              Lay garments flat in one photo. The AI finds each piece, then you crop-review and approve them locally.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-2 text-xs text-muted">
               <span className="chip">JPG / PNG / WebP</span>
@@ -383,10 +383,10 @@ export function AddPage({ apiKey, model, onAddItems, onOpenSettings, onApiUsage 
                 <ImagePlus className="h-5 w-5 text-accent" /> Prefer control?
               </div>
               <p className="mt-3 text-sm leading-relaxed text-ink-soft">
-                Add one item manually with your own photo and metadata. This does not use Gemini.
+                Add one item manually with your own photo and metadata. This does not use the AI provider.
               </p>
               <div className="mt-5 rounded-2xl border border-line bg-paper p-4 text-sm text-ink-soft">
-                AI recognition sends the selected photo to Google Gemini. Wardrobe images and metadata remain in IndexedDB on this device.
+                AI recognition sends the selected photo to the provider you chose in Settings. Wardrobe images and metadata remain in IndexedDB on this device.
               </div>
             </div>
             <button onClick={() => setStep('manual')} className="btn btn-outline mt-6 w-full">

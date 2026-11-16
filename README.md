@@ -1,31 +1,31 @@
 # Scarfy AI
 
-Scarfy AI is a private, local-first AI wardrobe assistant. Upload photos of clothing, let Gemini detect the garments in a batch photo, review the crops, and generate outfit ideas using only items you actually own.
+Scarfy AI is a private, local-first AI wardrobe assistant. Upload photos of clothing, let an AI provider detect the garments in a batch photo, review the crops, and generate outfit ideas using only items you actually own.
 
 ## What it does
 
 - Digital wardrobe with visual grid, search, filters, item details, editing, deleting, and exclusions.
-- Batch clothing recognition: one photo can contain multiple garments. Gemini returns structured metadata plus bounding boxes; Scarfy crops garments locally in the browser.
+- Batch clothing recognition: one photo can contain multiple garments. The selected provider returns structured metadata plus bounding boxes; Scarfy crops garments locally in the browser.
 - Review workflow: approve, edit, reject, or remove each detection before saving wardrobe items.
 - Outfit AI: describe an occasion, weather, temperature, dress code, and notes. Recommendations reference only real wardrobe item IDs.
 - Personalization: saved outfits, favorites, styling preferences, avoided colors/styles, per-item exclusions, and recent-outfit signatures to reduce repeats.
-- Settings: user-supplied Gemini API key, model selection, connection test, model list loading, usage feedback, and local data controls.
+- Settings: user-supplied API key for Gemini, Groq, OpenRouter, OpenAI, or a custom OpenAI-compatible endpoint; model selection; connection test; model list loading; usage feedback; and local data controls.
 - PWA: installable manifest, icons, and a small service worker for the app shell.
 
 ## Privacy and cost model
 
 - Wardrobe photos and metadata are stored in IndexedDB on the user's device.
 - Cropping, filtering, and ordinary image processing happen locally.
-- Only the selected upload photo is sent to Gemini for recognition. Outfit generation sends wardrobe metadata text, not wardrobe images.
+- Only the selected upload photo is sent to your chosen provider for recognition. Outfit generation sends wardrobe metadata text, not wardrobe images.
 - Recognition results are not automatically reanalyzed.
-- The Gemini API key is never hardcoded. By default it is kept only for the browser session; storing it across sessions is an explicit, clearly warned opt-in in Settings.
-- Gemini free-tier quotas and model availability can change. Scarfy does not promise unlimited AI usage.
+- API keys are never hardcoded. By default a key is kept only for the browser session; storing it across sessions is an explicit, clearly warned opt-in in Settings.
+- Free-tier quotas and model availability can change. Scarfy does not promise unlimited AI usage, and it does not ship a shared key.
 
 ## Requirements
 
 - Node.js 20+ (developed with Node 26).
 - npm.
-- A Gemini API key from Google AI Studio for AI features.
+- An API key from Groq, OpenRouter, Google AI Studio (Gemini), OpenAI, or another OpenAI-compatible provider for AI features. Groq and OpenRouter are usually the easiest free options.
 
 ## Run locally
 
@@ -36,12 +36,19 @@ npm run dev
 
 Open the local URL printed by Vite, usually `http://localhost:5173`.
 
-## Add a Gemini API key
+## Add an API key
 
-1. Create a key in [Google AI Studio](https://aistudio.google.com/apikey).
+1. Create a key from [Groq Console](https://console.groq.com/keys), [OpenRouter](https://openrouter.ai/keys), [Google AI Studio](https://aistudio.google.com/apikey), or [OpenAI](https://platform.openai.com/api-keys). You can also paste a key for a custom OpenAI-compatible base URL.
 2. In Scarfy, open **Settings**.
-3. Paste the key, choose a model, and click **Test**.
-4. Click **Save settings**.
+3. Choose the provider, or paste the key and let Scarfy detect it (`gsk_` is Groq, `sk-or-` is OpenRouter, `AIza` is Gemini, `sk-` is OpenAI).
+4. Confirm the model (vision-capable defaults are prefilled), click **Test**, then **Save settings**.
+
+Default models:
+
+- Groq: `qwen/qwen3.8-27b` (current Groq vision model; Llama 4 Scout was shut down)
+- OpenRouter: `nvidia/nemotron-3.5-super-vl:free`
+- OpenAI: `gpt-4o-mini`
+- Gemini: `gemini-3.8-flash`
 
 For stronger privacy, keep both storage checkboxes unchecked and paste the key when needed. "Remember for this browser session only" stores the key in `sessionStorage`; "Store key in this browser across sessions" stores it in `localStorage` until removed or site data is cleared. The key is never written to IndexedDB or source files.
 
@@ -60,7 +67,7 @@ Scarfy is a static PWA. Build it and deploy the `dist/` folder to any static hos
 
 ## Live demo
 
-The public GitHub Pages build is at [https://adamcantcodelol.github.io/scarfy-ai/](https://adamcantcodelol.github.io/scarfy-ai/). Add your own Gemini API key in Settings to use the AI features.
+The public GitHub Pages build is at [https://adamcantcodelol.github.io/scarfy-ai/](https://adamcantcodelol.github.io/scarfy-ai/). Add your own API key in Settings to use the AI features.
 
 ### GitHub Pages
 
@@ -91,7 +98,7 @@ This repo deploys the `dist/` folder to GitHub Pages at `/scarfy-ai/`. Vite `bas
 5. Output directory: `dist`
 6. Deploy.
 
-No environment variables are required because users supply their own Gemini API key in the app.
+No environment variables are required because users supply their own API key in the app.
 
 ## Scripts
 
@@ -120,7 +127,9 @@ src/
   types.ts                # wardrobe/outfit/settings types
   lib/
     db.ts                 # IndexedDB wrapper
-    gemini.ts             # Gemini REST calls and JSON parsing
+    providers.ts          # Provider defaults, key detection, CORS notes
+    ai.ts                 # Provider API calls and JSON parsing
+    gemini.ts             # Compatibility re-exports from ai.ts
     image.ts              # image prep, cropping, bounding boxes
     defaults.ts           # default metadata/preferences/settings
     hooks.ts              # object URL hook
@@ -137,7 +146,9 @@ scripts/
 
 ## Notes and limitations
 
-- AI recognition depends on Gemini vision quality. Bounding boxes can be imperfect, so the review step lets users correct detections before saving.
-- Very large photos are compressed before being sent to Gemini to stay within practical request sizes.
-- If a model name is unavailable, use **Load models** in Settings or choose another supported Gemini model.
+- AI recognition quality depends on the model you choose. Bounding boxes can be imperfect, so the review step lets users correct detections before saving.
+- Very large photos are compressed before being sent to stay within practical request sizes.
+- If a model name is unavailable, use **Load models** in Settings or type another supported model.
+- OpenAI error responses on chat completions sometimes omit CORS headers, so a bad key can look like a network error. Use **Test** in Settings to confirm the key.
+- Custom OpenAI-compatible endpoints only work in the browser if they send CORS headers that allow this site.
 - Service worker caching is for the app shell; user photos and wardrobe data remain in IndexedDB and are not uploaded to a backend.

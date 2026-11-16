@@ -1,8 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, KeyRound, Loader2, RefreshCw, ShieldAlert, Trash2, Wifi } from 'lucide-react'
 import type { Preferences, Settings } from '../types'
-import { MODEL_OPTIONS } from '../types'
-import { listModels, testConnection } from '../lib/gemini'
+import { listModels, testConnection } from '../lib/ai'
+import {
+  type ProviderId,
+  PROVIDER_KEY_LINKS,
+  PROVIDER_KEY_PLACEHOLDERS,
+  PROVIDER_LABELS,
+  PROVIDER_ORDER,
+  corsNoteFor,
+  defaultModelFor,
+  detectProviderFromKey,
+  isKnownModelFor,
+  MODEL_OPTIONS_BY_PROVIDER,
+} from '../lib/providers'
 
 interface SettingsPageProps {
   settings: Settings
@@ -21,8 +32,10 @@ function splitList(value: string): string[] {
 }
 
 export function SettingsPage({ settings, preferences, usage, wardrobeCount, outfitCount, onSaveSettings, onSavePreferences, onClearAllData, onApiUsage }: SettingsPageProps) {
+  const [provider, setProvider] = useState<ProviderId>(settings.provider || 'gemini')
   const [apiKey, setApiKey] = useState(settings.apiKey)
   const [model, setModel] = useState(settings.model)
+  const [baseUrl, setBaseUrl] = useState(settings.baseUrl ?? '')
   const [remember, setRemember] = useState(settings.rememberKeyInSession)
   const [persist, setPersist] = useState(settings.persistApiKey)
   const [availableModels, setAvailableModels] = useState<string[]>([])
@@ -37,21 +50,57 @@ export function SettingsPage({ settings, preferences, usage, wardrobeCount, outf
   useEffect(() => setPrefDraft(preferences), [preferences])
 
   const modelChoices = useMemo(() => {
-    const filtered = availableModels.filter((name) => /gemini/i.test(name) && !/(image|tts|live|audio|embedding|robotics|omni|translate|transcribe|decision)/i.test(name))
-    const choices = filtered.length > 0 ? filtered : [...MODEL_OPTIONS]
+    const suggested = MODEL_OPTIONS_BY_PROVIDER[provider]
+    const choices = [...suggested]
+    for (const name of availableModels) {
+      if (!choices.includes(name)) choices.push(name)
+    }
     if (model && !choices.includes(model)) choices.unshift(model)
     return choices
-  }, [availableModels, model])
+  }, [availableModels, model, provider])
 
   const effectiveKey = apiKey.trim()
+  const connection = {
+    provider,
+    apiKey: effectiveKey,
+    model: model.trim(),
+    baseUrl: baseUrl.trim() || undefined,
+  }
+
+  const applyProvider = (next: ProviderId, currentModel = model) => {
+    setProvider(next)
+    setAvailableModels([])
+    if (!currentModel.trim() || isKnownModelFor(provider, currentModel) || currentModel === defaultModelFor(provider)) {
+      setModel(defaultModelFor(next))
+    }
+  }
+
+  const handleKeyChange = (value: string) => {
+    setApiKey(value)
+    const detected = detectProviderFromKey(value)
+    if (detected && detected !== provider) applyProvider(detected, model)
+  }
+
+  const handleProviderChange = (next: ProviderId) => {
+    applyProvider(next)
+  }
 
   const save = async () => {
     setSaving(true)
     setError('')
     setMessage('')
     try {
-      onSaveSettings({ ...settings, apiKey: apiKey.trim(), model: model.trim() || settings.model, rememberKeyInSession: remember, persistApiKey: persist, updatedAt: Date.now() })
-      setMessage('Settings saved.')
+      onSaveSettings({
+        ...settings,
+        provider,
+        apiKey: apiKey.trim(),
+        model: model.trim() || defaultModelFor(provider),
+        baseUrl: provider === 'custom' ? baseUrl.trim() : '',
+        rememberKeyInSession: remember,
+        persistApiKey: persist,
+        updatedAt: Date.now(),
+      })
+      setMessage('Settings saved. Keys stay in this browser only.')
     } finally {
       setSaving(false)
     }
@@ -62,8 +111,8 @@ export function SettingsPage({ settings, preferences, usage, wardrobeCount, outf
     setError('')
     setMessage('')
     try {
-      if (!effectiveKey) throw new Error('Enter a Gemini API key first.')
-      const result = await testConnection(effectiveKey, model.trim() || settings.model)
+      if (!effectiveKey) throw new Error('Enter an API key first.')
+      const result = await testConnection(connection)
       setMessage(`Connected to ${result.model}.`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Connection failed')
@@ -78,8 +127,8 @@ export function SettingsPage({ settings, preferences, usage, wardrobeCount, outf
     setError('')
     setMessage('')
     try {
-      if (!effectiveKey) throw new Error('Enter a Gemini API key first.')
-      const models = await listModels(effectiveKey)
+      if (!effectiveKey) throw new Error('Enter an API key first.')
+      const models = await listModels(connection)
       setAvailableModels(models)
       setMessage(`Loaded ${models.length} available models.`)
     } catch (err) {
@@ -95,6 +144,8 @@ export function SettingsPage({ settings, preferences, usage, wardrobeCount, outf
     setMessage('Preferences saved.')
   }
 
+  const keyLink = PROVIDER_KEY_LINKS[provider]
+
   return (
     <div className="space-y-6">
       <div>
@@ -109,17 +160,57 @@ export function SettingsPage({ settings, preferences, usage, wardrobeCount, outf
         <section className="card p-5 sm:p-6">
           <div className="mb-5 flex items-center gap-2">
             <KeyRound className="h-5 w-5 text-accent" />
-            <h2 className="font-display text-2xl font-semibold">Gemini API key</h2>
+            <h2 className="font-display text-2xl font-semibold">API provider</h2>
           </div>
+          <p className="mb-4 text-sm text-ink-soft">
+            Use any supported key. Pasting a key usually selects the provider automatically
+            (<code className="text-xs">gsk_</code> is Groq, <code className="text-xs">sk-or-</code> is OpenRouter,{' '}
+            <code className="text-xs">AIza</code> is Gemini, <code className="text-xs">sk-</code> is OpenAI).
+            If Gemini is blocked by verification, Groq and OpenRouter both have free keys.
+          </p>
           <label className="grid gap-1.5 text-sm font-medium text-ink-soft">
+            Provider
+            <select className="input" value={provider} onChange={(event) => handleProviderChange(event.target.value as ProviderId)}>
+              {PROVIDER_ORDER.map((id) => (
+                <option key={id} value={id}>{PROVIDER_LABELS[id]}</option>
+              ))}
+            </select>
+          </label>
+          <p className="mt-3 text-sm leading-relaxed text-ink-soft">{corsNoteFor(provider)}</p>
+          {keyLink && (
+            <p className="mt-2 text-sm text-ink-soft">
+              Get a key from{' '}
+              <a className="font-semibold text-accent-strong underline underline-offset-2" href={keyLink.href} target="_blank" rel="noreferrer">
+                {keyLink.label}
+              </a>
+              .
+            </p>
+          )}
+
+          {provider === 'custom' && (
+            <label className="mt-4 grid gap-1.5 text-sm font-medium text-ink-soft">
+              Base URL
+              <input
+                className="input"
+                type="url"
+                autoComplete="off"
+                value={baseUrl}
+                onChange={(event) => setBaseUrl(event.target.value)}
+                placeholder="https://api.example.com/v1"
+              />
+              <span className="font-normal text-xs text-muted">OpenAI-compatible chat completions endpoint prefix, including /v1 if the server uses it.</span>
+            </label>
+          )}
+
+          <label className="mt-4 grid gap-1.5 text-sm font-medium text-ink-soft">
             API key
             <input
               className="input"
               type="password"
               autoComplete="off"
               value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder={settings.apiKey ? 'Key saved' : 'Paste your Gemini API key'}
+              onChange={(event) => handleKeyChange(event.target.value)}
+              placeholder={settings.apiKey ? 'Key saved' : PROVIDER_KEY_PLACEHOLDERS[provider]}
             />
           </label>
           <label className="mt-4 flex items-start gap-3 rounded-2xl border border-line bg-paper p-4 text-sm text-ink-soft">
@@ -155,28 +246,36 @@ export function SettingsPage({ settings, preferences, usage, wardrobeCount, outf
             </span>
           </label>
 
-          <div className="mt-5 grid gap-4 sm:grid-cols-2">
-            <label className="grid gap-1.5 text-sm font-medium text-ink-soft">
-              Model
-              <select className="input" value={model} onChange={(event) => setModel(event.target.value)}>
-                {modelChoices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
-              </select>
-            </label>
-            <div className="flex items-end gap-2">
-              <button onClick={test} disabled={testing} className="btn btn-outline flex-1">
-                {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wifi className="h-4 w-4" />} Test
-              </button>
-              <button onClick={loadModels} disabled={loadingModels} className="btn btn-outline flex-1">
-                {loadingModels ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Load models
-              </button>
-            </div>
+          <label className="mt-5 grid gap-1.5 text-sm font-medium text-ink-soft">
+            Model
+            <input
+              className="input"
+              list="scarfy-model-choices"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              placeholder={defaultModelFor(provider) || 'model-name'}
+            />
+            <datalist id="scarfy-model-choices">
+              {modelChoices.map((choice) => (
+                <option key={choice} value={choice} />
+              ))}
+            </datalist>
+            <span className="font-normal text-xs text-muted">Suggested vision-capable defaults are listed; you can type any model name the provider accepts.</span>
+          </label>
+          <div className="mt-3 flex items-end gap-2">
+            <button onClick={test} disabled={testing} className="btn btn-outline flex-1">
+              {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wifi className="h-4 w-4" />} Test
+            </button>
+            <button onClick={loadModels} disabled={loadingModels} className="btn btn-outline flex-1">
+              {loadingModels ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Load models
+            </button>
           </div>
 
           <div className="mt-5 flex flex-wrap gap-2">
             <button onClick={save} disabled={saving} className="btn btn-primary">
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Save settings
             </button>
-            <button onClick={() => { setApiKey(''); onSaveSettings({ ...settings, apiKey: '', updatedAt: Date.now() }); setMessage('API key removed from this session.') }} className="btn btn-ghost text-danger">
+            <button onClick={() => { setApiKey(''); onSaveSettings({ ...settings, provider, apiKey: '', model, baseUrl: provider === 'custom' ? baseUrl.trim() : settings.baseUrl, updatedAt: Date.now() }); setMessage('API key removed from this session.') }} className="btn btn-ghost text-danger">
               Remove key
             </button>
           </div>
@@ -190,12 +289,12 @@ export function SettingsPage({ settings, preferences, usage, wardrobeCount, outf
               Clothing photos and metadata are stored in IndexedDB on this device: {wardrobeCount} items, {outfitCount} saved outfits.
             </div>
             <div className="rounded-2xl border border-line bg-paper p-4">
-              <div className="font-semibold text-ink">What Gemini sees</div>
-              Only the photo you upload for recognition and the text metadata needed for outfit planning are sent to Google. Cropping and filtering happen locally.
+              <div className="font-semibold text-ink">What the provider sees</div>
+              Only the photo you upload for recognition and the text metadata needed for outfit planning are sent to the provider you chose. Cropping and filtering happen locally. Keys never leave this browser except in those API requests.
             </div>
             <div className="rounded-2xl border border-line bg-paper p-4">
               <div className="font-semibold text-ink">Free tier caveat</div>
-              Gemini free-tier quotas and model availability can change. Scarfy does not promise unlimited AI usage.
+              Free-tier quotas and model availability can change. Scarfy does not promise unlimited AI usage, and it does not provide a shared key.
             </div>
             <div className="rounded-2xl border border-line bg-paper p-4">
               <div className="font-semibold text-ink">API usage this session</div>

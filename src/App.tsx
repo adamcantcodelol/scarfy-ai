@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Outfit, Page, Preferences, Settings, WardrobeItem } from './types'
-import { DEFAULT_MODEL } from './types'
+import { DEFAULT_MODELS, connectionFromSettings, type ProviderId } from './lib/providers'
 import {
   clearAllLocalData,
   deleteOutfit,
@@ -18,7 +18,7 @@ import {
   putUsage,
   putWardrobeItem,
 } from './lib/db'
-import { generateOutfits, generatedToOutfit, type GeneratedOutfit } from './lib/gemini'
+import { generateOutfits, generatedToOutfit, type GeneratedOutfit } from './lib/ai'
 import { outfitSignature } from './lib/image'
 import { defaultPreferences, defaultSettings } from './lib/defaults'
 import { Layout } from './components/Layout'
@@ -71,13 +71,17 @@ export default function App() {
         setOutfits(savedOutfits)
         if (prefs) setPreferences(prefs)
         const base = defaultSettings()
+        const stored = storedSettings
+        const provider: ProviderId = stored?.provider || 'gemini'
         const nextSettings: Settings = {
           ...base,
-          ...(storedSettings ?? {}),
-          model: storedSettings?.model || DEFAULT_MODEL,
-          apiKey: storedSettings?.persistApiKey
+          ...(stored ?? {}),
+          provider,
+          model: stored?.model || DEFAULT_MODELS[provider] || DEFAULT_MODELS.gemini,
+          baseUrl: stored?.baseUrl || '',
+          apiKey: stored?.persistApiKey
             ? localStorage.getItem(PERSIST_KEY) ?? ''
-            : storedSettings?.rememberKeyInSession
+            : stored?.rememberKeyInSession
               ? sessionStorage.getItem(SESSION_KEY) ?? ''
               : '',
         }
@@ -124,7 +128,9 @@ export default function App() {
       localStorage.removeItem(PERSIST_KEY)
     }
     void putSettings({
+      provider: next.provider,
       model: next.model,
+      baseUrl: next.baseUrl || '',
       rememberKeyInSession: next.rememberKeyInSession,
       persistApiKey: next.persistApiKey,
       updatedAt: next.updatedAt,
@@ -187,11 +193,11 @@ export default function App() {
   }
 
   const handleGenerate = async (request: { occasion: string; weather?: string; temperatureC?: number; dressCode?: string; notes?: string }) => {
-    if (!settings.apiKey) throw new Error('Add your Gemini API key in Settings first.')
+    if (!settings.apiKey) throw new Error('Add your API key in Settings first.')
     const prompt = JSON.stringify(request)
     let generated: GeneratedOutfit[]
     try {
-      generated = await generateOutfits(settings.apiKey, settings.model, wardrobe, preferences, request, recentSignatures)
+      generated = await generateOutfits(connectionFromSettings(settings), wardrobe, preferences, request, recentSignatures)
     } finally {
       void noteUsage('outfit')
     }
@@ -263,8 +269,7 @@ export default function App() {
       {page.name === 'wardrobe' && <WardrobePage wardrobe={wardrobe} onOpenItem={(id) => setPage({ name: 'item', itemId: id })} onAdd={() => setPage({ name: 'add' })} />}
       {page.name === 'add' && (
         <AddPage
-          apiKey={settings.apiKey}
-          model={settings.model}
+          connection={connectionFromSettings(settings)}
           onAddItems={addItems}
           onOpenSettings={() => setPage({ name: 'settings' })}
           onApiUsage={() => noteUsage('recognition')}

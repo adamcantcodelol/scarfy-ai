@@ -86,7 +86,7 @@ try {
   await clickText(page, 'Outfit AI')
   await waitText(page, 'Recommendations use only items already in your wardrobe')
   await clickText(page, 'Generate outfits')
-  await page.waitForFunction(() => document.body.innerText.includes('Settings') || document.body.innerText.includes('Add your Gemini API key'), { timeout: 5000 })
+  await page.waitForFunction(() => document.body.innerText.includes('Settings') || document.body.innerText.includes('Add your API key'), { timeout: 5000 })
 
   await page.setViewport({ width: 390, height: 844 })
   await page.reload({ waitUntil: 'networkidle0' })

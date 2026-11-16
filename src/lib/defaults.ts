@@ -1,5 +1,5 @@
 import type { GarmentMetadata, Preferences, Settings } from '../types'
-import { DEFAULT_MODEL } from '../types'
+import { DEFAULT_MODELS } from './providers'
 
 export function emptyGarmentMetadata(): GarmentMetadata {
   return {
@@ -29,8 +29,10 @@ export function defaultPreferences(): Preferences {
 
 export function defaultSettings(): Settings {
   return {
+    provider: 'gemini',
     apiKey: '',
-    model: DEFAULT_MODEL,
+    model: DEFAULT_MODELS.gemini,
+    baseUrl: '',
     rememberKeyInSession: true,
     persistApiKey: false,
     updatedAt: Date.now(),
